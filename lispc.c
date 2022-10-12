@@ -29,18 +29,14 @@ typedef struct Obj
         Integer
     } type;
 
-    struct
-    {
-        struct Obj *car;
-        struct Obj *cdr;
-    };
-
-    struct Obj *(*pfn)(struct Obj *);
-
-    char *stringValue;
-    
+    struct Obj *data;
     struct Obj *next;
+    char *stringValue;
+    int integerValue;
+    struct Obj *(*pfn)(struct Obj *);
 } Obj;
+
+static Obj *Symbols = 0;
 
 // TODO: should we add period "." as well?
 char* VALID_SYMBOLS = "+-*/@$%^&_=<>~";
@@ -89,11 +85,8 @@ Obj *make_obj(int type)
 
 Obj *make_atom(char *token)
 {
-    // TODO: check if token is integer
-
     Obj* atom = make_obj(Symbol);
     atom->stringValue = token;
-
     return atom;
 }
 
@@ -107,37 +100,59 @@ Obj *make_primitive(Obj *(*fn)(Obj *))
 Obj *cons(Obj *car, Obj *cdr)
 {
     Obj *pair = make_obj(Cell);
-    pair->car = car;
-    pair->cdr = cdr;
+    pair->data = car;
+    pair->next = cdr;
     return pair;
 }
 
 Obj *car(Obj *obj)
 {
-    return obj->car;
+    return obj->data;
 }
 
 Obj *cdr(Obj *obj)
 {
-    return obj->cdr;
+    return obj->next;
 }
 
-Obj *intern(Obj *env, char *name)
+Obj *intern(char *name)
 {
-    for (Obj *p = env; p; p = p->cdr)
-        if (strcmp(name, p->car->stringValue) == 0)
+    for (Obj *p = Symbols; p; p = cdr(p))
+        if (car(p)->type == Symbol && strcmp(name, car(p)->stringValue) == 0)
             return car(p);
 
     Obj *new_symbol = make_atom(name);
-    env = cons(new_symbol, env);
-    return car(env);
+    Symbols = cons(new_symbol, Symbols);
+    return car(Symbols);
+}
+
+Obj* assoc(Obj *exp, Obj* env)
+{
+    while (env != 0) {
+        if (car(car(env)) == exp) {
+            return cdr(car(env));
+        }
+        env = cdr(env);
+    }
+    error("error: cannot find symbol: %s\n", exp->stringValue);
+}
+
+int obj_length(Obj* obj) {
+    int len = 0;
+
+    while (obj) {
+        len++;
+        obj = cdr(obj);
+    }
+
+    return len;
 }
 
 Obj *read_from_tokens(char **tokens)
 {
     char *token = *tokens;
 
-    if (strcmp("(", token) == 0)
+    if (*token == '(')
     {
         Obj *list;
         Obj *root;
@@ -145,9 +160,10 @@ Obj *read_from_tokens(char **tokens)
         root = list;
 
         while (token && *token != ')') {
-            list->next = read_from_tokens(++tokens);
+            Obj* obj = read_from_tokens(++tokens);
+            list->next = obj;
             list = list->next;
-            token = *(tokens + 1);
+            token = *(tokens + obj_length(obj));
         }
 
         // pop off ")"
@@ -155,9 +171,15 @@ Obj *read_from_tokens(char **tokens)
 
         return root;
     }
+    else if (isdigit(*token))
+    {
+        Obj* integer = make_obj(Integer);
+        integer->integerValue = atoi(token);
+        return integer;
+    }
     else
     {
-        return make_atom(token);
+        return intern(token);
     }
 }
 
@@ -184,18 +206,64 @@ Obj *prim_car(Obj *obj) {
     return car(car(obj));
 }
 
+Obj *prim_cdr(Obj *obj) {
+    return car(cdr(obj));
+}
+
+Obj *prim_plus(Obj *obj) {
+    Obj* result = make_obj(Integer);
+    while (obj) {
+        result->integerValue = result->integerValue + car(obj)->integerValue;
+        obj = cdr(obj);
+    }
+    return result;
+}
+
+Obj *eval(Obj *exp, Obj *env);
+
+Obj *evlist(Obj *list, Obj *env)
+{
+    if (list != 0)
+    {
+        return cons(
+            eval(list, env),
+            evlist(cdr(list), env));
+    }
+
+    return 0;
+}
+
+Obj *eval(Obj *exp, Obj *env) {
+    if (exp->type == Symbol) {
+        return assoc(exp, env);
+    }
+
+    if (exp->type == Integer) {
+        return exp;
+    }
+
+    if (exp->type == Primitive) {
+        return exp;
+    }
+
+    if (exp->type == List) {
+        Obj* pfn = eval(cdr(exp), env);
+        return pfn->pfn(evlist(cdr(cdr(exp)), env));
+    }
+}
+
 int main(void)
 {
-    char **tokens = tokenize("(+ 3 5)");
+    char **tokens = tokenize("(+ 3 (+ 5 5))");
+
+    Obj *env = cons(
+        cons(intern("car"), make_primitive(prim_car)),
+        cons(cons(intern("+"), make_primitive(prim_plus)),
+             0));
 
     Obj* obj = read_from_tokens(tokens);
 
-    //Obj *root = &(Obj){EnvType};
-    //parse(root, tokens);
+    Obj* evald = eval(obj, env);
 
-    freopen("test.txt", "r", stdin);
-
-    Obj *env = 0;
-
-    env = cons(cons(intern(env, "car"), cons(make_primitive(prim_car), 0)), 0);
+    printf('eval type: %s', evald->type);
 }
